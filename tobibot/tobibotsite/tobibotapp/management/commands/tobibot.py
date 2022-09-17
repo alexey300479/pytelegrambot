@@ -1,12 +1,15 @@
 import json
 import random
 import re
-from sys import path_hooks
 from django.core.management.base import BaseCommand
+from django.core.validators import URLValidator
+from django.core.exceptions import ValidationError
 
 from tobibotapp.models import Resident, Branch, Building
 from telebot import types  # Подключили дополнения
-from telebot import TeleBot  # Используем асинхронный бот
+from telebot import TeleBot  # Используем синхронный бот
+
+from ._email3 import  send_email
 
 email_confirm_code = None
 
@@ -115,7 +118,7 @@ def callback_worker(call):
         resident.save()
         text = '''
 Данные успешно сохранены в базе 👍🏻.
-Прогресс регистрации 33% 🛫.
+Прогресс регистрации 4/14 🛫.
 
 Теперь я попрошу у вас адрес электронной почты.
 
@@ -134,15 +137,22 @@ def callback_worker(call):
         bot.send_message(
             call.message.chat.id, 'Видимо ваш профиль в Telegram заполнен неверно. Сожалею, придется вводить данные вручную!')
 
-
 def get_email(message):
     global email_confirm_code
 
     # * Проверяем текст сообщения на соответствие правилам для адресов электронной почты
     email = message.text.strip()
     if is_email_valid(email):
+        # Генерируем случайный проверочный код
         email_confirm_code = str(random.choice(range(1000, 10000)))
-        print(email_confirm_code)
+        # Получаем экземпляр объекта Resident по tg_user_id
+        resident = Resident.objects.filter(tg_user_id=message.from_user.id).first()
+        # Сохраняем електронную почту и код
+        resident.email = email
+        resident.email_confirm_code = email_confirm_code
+        resident.save()
+        # Отправляем письмо с кодом подтверждения
+        send_email(email, 'Подтверждение электронной почты', email_confirm_code)
 
         text = '''
 Отлично 👍🏻
@@ -164,7 +174,74 @@ def get_email(message):
 
 
 def email_confirm(message):
+    # Получаем экземпляр объекта Resident по tg_user_id
+    resident = Resident.objects.filter(tg_user_id=message.from_user.id).first()
+    
+    if resident.email_confirm_code == message.text.strip():
+        # Меняем код подтверждения почты на CONFIRMED
+        resident.email_confirm_code = 'CONFIRMED'
+        # Отражаем изменения в БД
+        resident.save()
+        text = '''
+Email успешно подтверждён и сохранён в базе 👍🏻.
+Прогресс регистрации 5/14 🛫.
 
-    if str(email_confirm_code) == message.text.strip():
-        bot.send_message(
-            message.chat.id, 'Поздравляю! Email успешно подтверждён.')
+Пожалуйста, отправьте ссылку на вашу страницу в соцсети.
+
+Эта ссылка  будет видна другим резидентам бизнес-инкубатора через инструмент "КАТАЛОГ".
+
+Так потенциальным клиентам из экосистемы бизнес-инкубатора будет легче понять, чем вы можете быть им полезны.            
+        '''
+        message_reply = bot.send_message(message.chat.id, text)
+        bot.register_next_step_handler(message_reply, get_socials)
+
+
+def get_socials(message):
+    url = message.text.strip()
+    print(url)
+    
+    val = URLValidator()
+    try:
+        val(url)
+    except ValidationError:
+        text = '''
+С вашей ссылкой что-то не так.
+Попробуйте еще раз
+        '''
+        message_reply = bot.send_message(message.from_user.id, text)
+        bot.register_next_step_handler(message_reply, get_socials)
+        return
+
+    resident = Resident.objects.filter(tg_user_id=message.from_user.id).first()
+    resident.socials = url
+    resident.save()
+
+    text = '''
+Ссылка на страницу в соцсетях успешно сохранёна в базе 👍🏻.
+Прогресс регистрации 6/14 🛫.
+
+Пожалуйста, отправьте дату вашего рождения в формате:
+ГГГГ-ММ-ДД
+Например:
+1979-04-30
+Это будет соответстовать 30 апреля 1979 года
+        '''
+    message_reply = bot.send_message(message.chat.id, text)
+    bot.register_next_step_handler(message_reply, get_birthdate)
+
+def get_birthdate(message):
+    birthdate = message.text.strip()
+    resident = Resident.objects.filter(tg_user_id=message.from_user.id).first()
+    try:
+        resident.birthdate=birthdate
+        resident.save()
+    except ValidationError:
+        text = '''
+Дата рождения указана неверно.
+Попробуйте еще раз, пожалуйста.
+        '''
+        message_reply = bot.send_message(message.from_user.id, text)
+        bot.register_next_step_handler(message_reply, get_birthdate)
+        return
+    
+

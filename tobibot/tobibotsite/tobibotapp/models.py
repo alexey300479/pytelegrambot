@@ -34,7 +34,7 @@ class Branch(models.Model):
 class Resident(models.Model):
     exclude = ('email_confirm_code', )
     # * Реализовано в боте
-    tg_user_id = models.IntegerField(
+    tg_user_id = models.BigIntegerField(
         primary_key=True, auto_created=False, unique=True, verbose_name='Telegram ID')
     # * Реализовано в боте
     tg_username = models.CharField(
@@ -51,8 +51,7 @@ class Resident(models.Model):
         default='', verbose_name='Страница в соцсети', blank=True)
     birthdate = models.DateField(
         default='1900-01-01', verbose_name='Дата рождения', blank=True)
-    photo = models.ImageField(
-        verbose_name='Фотография', upload_to='images/', null=True, blank=True)
+    photo = models.URLField(default='', verbose_name='Фотография', blank=True)
     building = models.ForeignKey(
         Building, on_delete=models.CASCADE, default=1, verbose_name='Здание инкубатора', blank=True)
     office = models.CharField(
@@ -66,7 +65,7 @@ class Resident(models.Model):
     description = models.TextField(
         max_length=500, default='', verbose_name='Описание', blank=True)
     email_confirm_code = models.CharField(
-        max_length=4, default='', verbose_name='Код подтверждения email')
+        max_length=9, default='', verbose_name='Код подтверждения email')
 
     def __str__(self):
         return f'{self.company}. Руководитель {self.first_name} {self.last_name}'
