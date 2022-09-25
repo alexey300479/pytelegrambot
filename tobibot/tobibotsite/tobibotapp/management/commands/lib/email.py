@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import smtplib
-import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
-from email import encoders
 from platform import python_version
+import random
+
 
 SERVER = 'smtp.yandex.ru'
 USER = 'support@citadel-trade.ru'
 PASSWORD = 'dml46367dml'
 SENDER = 'support@citadel-trade.ru'
+
+
+def get_confirm_code():
+    return str(random.choice(range(1000, 10000)))
+
 
 def send_email(to, subject, text):
     recipients = [to, ]
