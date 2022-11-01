@@ -5,8 +5,8 @@ from telebot.handler_backends import State, StatesGroup  # States
 class RegisterStates(StatesGroup):
     # Эти два значения получаем автоматически после отправки
     # пользователем команды /start
-    tg_user_id = State()    # 1. Идентификатор пользователя Telegram
-    tg_username = State()   # 2. Имя пользователя Telegram
+    tg_user_id_username = State()    # 1. Идентификатор пользователя Telegram
+    # tg_username = State()   # 2. Имя пользователя Telegram
 
     # Эти три значения получаем автоматически если
     # одновременно выполняются условия:

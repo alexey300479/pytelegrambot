@@ -32,13 +32,14 @@ class Branch(models.Model):
 
 
 class Resident(models.Model):
-    exclude = ('email_confirm_code', 'reg_state')
+    exclude = ('email_confirm_code', 'reg_state', 'tg_user_id')
     # * Реализовано в боте
     tg_user_id = models.BigIntegerField(
         primary_key=True, auto_created=False, unique=True, verbose_name='Telegram ID')
     # * Реализовано в боте
     tg_username = models.CharField(
-        max_length=33, default='', unique=True, verbose_name='Имя пользователя Telegram')
+        max_length=33, default='', unique=True, verbose_name='Имя пользователя Telegram',
+        blank=True, null=True)
     # ! Реализовано в боте только мехнизмом "Поделиться контактом" и работает
     # ! только при условии правильно заполненного профиля пользователя в Telegram
     # ! ---
@@ -49,7 +50,7 @@ class Resident(models.Model):
     email = models.EmailField(default='', verbose_name='Email', blank=True)
     socials = models.URLField(
         default='', verbose_name='Страница в соцсети', blank=True)
-    birthdate = models.DateField(
+    birth_date = models.DateField(
         default='1900-01-01', verbose_name='Дата рождения', blank=True)
     photo = models.ImageField(
         default='', verbose_name='Фотография', blank=True)
@@ -59,16 +60,16 @@ class Resident(models.Model):
         max_length=50, default='', verbose_name='Офис', blank=True)
     company = models.CharField(
         max_length=100, verbose_name='Название компании', blank=True)
-    branch = models.ManyToManyField(
-        Branch, verbose_name='Направление', blank=True)
+    branch = models.ForeignKey(
+        Branch, on_delete=models.CASCADE, default=1, verbose_name='Направление бизнеса', blank=True)
     website = models.URLField(
         default='', verbose_name='Сайт компании', blank=True)
     description = models.TextField(
         max_length=1000, default='', verbose_name='Описание', blank=True)
     email_confirm_code = models.CharField(
         max_length=9, default='', verbose_name='Код подтверждения email')
-    reg_state = models.CharField(
-        max_length=20, blank=True, default='', verbose_name='Статус регистрации')
+    registration_completed = models.BooleanField(
+        default=False, verbose_name='Регистрация завершена')
 
     def __str__(self):
         return f'{self.company}. Руководитель {self.first_name} {self.last_name}'

@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from pprint import pprint
 
 from django.core.exceptions import ValidationError
@@ -7,6 +8,7 @@ from django.core.validators import URLValidator
 from telebot import TeleBot  # Используем синхронный бот
 from telebot import types  # Подключили дополнения
 from telebot import custom_filters
+from telebot import formatting
 from telebot.storage import StateRedisStorage
 from tobibotapp.models import Branch, Building, Resident
 
@@ -46,6 +48,17 @@ def start_help(message):
     # Если эту команду мы получили от бота, то игноририуем
     if message.from_user.is_bot:
         return
+
+    # Если это не бот, то сразу устанавливаем в redis состояние tg_user_id_username
+    # и записываем в данные tg_user_id и tg_username
+    bot.set_state(
+        message.from_user.id,
+        RegisterStates.tg_user_id_username,
+        message.chat.id)
+
+    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+        data['tg_user_id'] = message.from_user.id
+        data['tg_username'] = message.from_user.username
 
     # Пытаемся получить запись с таким id из БД
     resident = Resident.objects.filter(tg_user_id=message.from_user.id).first()
@@ -100,23 +113,41 @@ def contact(message):
         print('contact')
 
     if message.contact is not None:  # Если присланный объект contact не пустой
-        text = f'''
+        if message.contact.first_name is not None\
+                and message.contact.last_name is not None\
+                and message.contact.phone_number is not None\
+                and message.from_user.username is not None:
+
+            text = f'''
 Ваше имя: {message.contact.first_name}
 Ваша фамилия: {message.contact.last_name}
 Ваш номер телефона: {message.contact.phone_number}
 
 Всё верно?
         '''
-        keyboard = types.InlineKeyboardMarkup()
-        # По нажатию кнопки "ДА" передаем номер телефона
-        button_yes = types.InlineKeyboardButton(
-            text='ДА', callback_data=message.contact.phone_number)
-        # По нажатию кнопки "НЕТ" передаем
-        button_no = types.InlineKeyboardButton(
-            text='НЕТ', callback_data='wrong_contacts')
-        keyboard.add(button_yes)
-        keyboard.add(button_no)
-        bot.send_message(message.chat.id, text, reply_markup=keyboard)
+            keyboard = types.InlineKeyboardMarkup()
+            # По нажатию кнопки "ДА" передаем номер телефона
+            button_yes = types.InlineKeyboardButton(
+                text='ДА', callback_data=message.contact.phone_number)
+            # По нажатию кнопки "НЕТ" передаем
+            button_no = types.InlineKeyboardButton(
+                text='НЕТ', callback_data='wrong_contacts')
+            keyboard.add(button_yes)
+            keyboard.add(button_no)
+            bot.send_message(message.chat.id, text, reply_markup=keyboard)
+        else:
+            text = '''
+Ваш профиль в Telegram не оформлен должным образом.
+Сожалею, но придётся ввести данные вручную.
+
+Итак, ваше имя:
+'''
+            bot.set_state(
+                message.from_user.id,
+                RegisterStates.first_name,
+                message.chat.id)
+
+            bot.send_message(message.chat.id, text)
 
 
 @bot.message_handler(state=RegisterStates.first_name)
@@ -152,7 +183,7 @@ def get_last_name(message):
         message.chat.id)
 
     text = '''
-Ваша фамилия успешно сохранёна в базе 👍🏻.
+Ваша фамилия успешно сохраена в базе 👍🏻.
 Прогресс регистрации 4 из 15 🛫.
 
 Введите ваш номер телефона:
@@ -364,6 +395,54 @@ Bot state is {bot.get_state(call.from_user.id, call.message.chat.id)}
         '''
         bot.send_message(call.message.chat.id, text)
 
+    elif call.data.split()[0] == 'Branch_to_find_residents:':
+        branch_id = int(call.data.split()[1])
+        if DEBUG:
+            print(f'Branch ID selected: {branch_id}')
+
+        residents = Resident.objects.filter(branch=branch_id)
+        for resident in residents:
+            if DEBUG:
+                print(f'Resident found: {resident.company}')
+
+            # with open(resident.photo, 'rb') as photo:
+            demo_text = '''
+<b>bold</b>, <strong>bold</strong>
+<i>italic</i>, <em>italic</em>
+<u>underline</u>, <ins>underline</ins>
+<s>strikethrough</s>, <strike>strikethrough</strike>, <del>strikethrough</del>
+<span class="tg-spoiler">spoiler</span>, <tg-spoiler>spoiler</tg-spoiler>
+<b>bold <i>italic bold <s>italic bold strikethrough <span class="tg-spoiler">italic bold strikethrough spoiler</span></s> <u>underline italic bold</u></i> bold</b>
+<a href="http://www.example.com/">inline URL</a>
+<a href="tg://user?id=123456789">inline mention of a user</a>
+<code>inline fixed-width code</code>
+<pre>pre-formatted fixed-width code block</pre>
+<pre><code class="language-python">pre-formatted fixed-width code block written in the Python programming language</code></pre>
+            '''
+
+            text = f'''
+<b>{resident.company}</b>
+<em>{resident.description}</em>
+
+Контакты:
+<b>{resident.first_name} {resident.last_name}</b>
+<a href="tg://user?id={resident.tg_user_id}">Написать в Telegram</a>
+<a href="tel:{resident.phone}">Позвонить: {resident.phone}</a>
+<a href="mailto:{resident.email}">Отправить почту на: {resident.email}</a>
+<a href="{resident.socials}">Соцсеть: {resident.socials}</a>
+<a href="{resident.website}">Сайт: {resident.website}</a>
+Адрес: {resident.building}, офис {resident.office}
+                    '''
+
+            if DEBUG:
+                print(text)
+
+            bot.send_photo(
+                call.message.chat.id,
+                resident.photo,
+                caption=text,
+                parse_mode='HTML')
+
 
 @bot.message_handler(state=RegisterStates.email)
 def get_email(message):
@@ -489,8 +568,11 @@ def get_socials(message):
     if DEBUG:
         print(f'RegisterStates.socials')
 
-    # Получаем URL социальной сетти
+    # Получаем URL социальной сети
     url = message.text.strip()
+    if url.find('https://') == -1:
+        url = f'https://{url}'
+
     val = URLValidator()
 
     try:
@@ -521,7 +603,7 @@ def get_socials(message):
 
     # Запрашиваем у пользователя дату рождения
     text = '''
-Ссылка на страницу в соцсетях успешно сохранёна в базе 👍🏻.
+Ссылка на страницу в соцсетях успешно сохранена в базе 👍🏻.
 Прогресс регистрации 7 из 15 🛫.
 
 Пожалуйста, отправьте дату вашего рождения в формате:
@@ -537,17 +619,17 @@ def get_socials(message):
 
 
 @bot.message_handler(state=RegisterStates.birth_date)
-def get_birthdate(message):
+def get_birth_date(message):
     # Отладка
     if DEBUG:
         print(f'RegisterStates.birth_date')
 
-    birthdate = message.text.strip()
+    birth_date = message.text.strip()
     # Если дата задана в верном формате
-    if is_date_valid(birthdate):
+    if is_date_valid(birth_date):
         # Записываем её в redis
         with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
-            data['birth_date'] = birthdate
+            data['birth_date'] = birth_date
 
         # Переводим бот в состояние RegisterStates.photo
         bot.set_state(
@@ -557,7 +639,7 @@ def get_birthdate(message):
 
         # Просим отправить фотографию
         text = '''
-Дата рождения успешно сохранёна в базе 👍🏻.
+Дата рождения успешно сохранена в базе 👍🏻.
 Прогресс регистрации 8 из 15 🛫.
 
 Пожалуйста, отправьте вашу фотографию:
@@ -682,6 +764,27 @@ def get_company(message):
     bot.send_message(message.chat.id, text, reply_markup=keyboard)
 
 
+@bot.message_handler(commands=['find_residents'])
+def find_residents(message):
+    # Отладка
+    if DEBUG:
+        print('find_resdents')
+
+        text = '''
+Для поиска резидентов по определенному направлению бизнеса выберите его из списка ниже:
+    '''
+
+    branches = list(Branch.objects.values_list('name', flat=True))
+
+    keyboard = types.InlineKeyboardMarkup()
+    for i, branch in enumerate(branches, start=1):
+        button = types.InlineKeyboardButton(
+            f'{i}. {branch}', callback_data=f'Branch_to_find_residents: {i}')
+        keyboard.add(button)
+
+    bot.send_message(message.chat.id, text, reply_markup=keyboard)
+
+
 @bot.message_handler(state=RegisterStates.website)
 def get_website(message):
     # Отладка
@@ -690,6 +793,9 @@ def get_website(message):
 
     # Получаем URL сайта
     url = message.text.strip()
+    if url.find('https://') == -1:
+        url = f'https://{url}'
+
     val = URLValidator()
 
     try:
@@ -720,7 +826,7 @@ def get_website(message):
 
     # Запрашиваем у пользователя описание бизнеса
     text = '''
-Ссылка на ваш сайт успешно сохранёна в базе 👍🏻.
+Ссылка на ваш сайт успешно сохранена в базе 👍🏻.
 Прогресс регистрации 14 из 15 🛫.
 
 Пожалуйста, отправьте описание вашего бизнеса.
@@ -734,11 +840,6 @@ def get_description(message):
     if DEBUG:
         print(f'RegisterStates.description')
 
-    bot.set_state(
-        message.from_user.id,
-        RegisterStates.complete,
-        message.chat.id)
-
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
         data['description'] = message.text
 
@@ -751,27 +852,50 @@ def get_description(message):
 
 Я буду помогать вам. Держать в курсе событий. Давать информацию о других резидентах.
 
-Чтобы узнать о моих возможностях выберите в меню ппункт "ПОМОЩЬ" или отправьте /help.
+Чтобы узнать о моих возможностях выберите в меню пункт "ПОМОЩЬ" или отправьте /help.
     '''
-
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
         data['description'] = message.text
+
+        print(f"type of data['birth_date'] is {type(data['birth_date'])}")
+        if data['birth_date'] is not datetime:
+            data['birth_date'] = datetime.strptime(
+                data['birth_date'], '%d.%m.%Y')
+
         building_id = data['building']
         building = Building.objects.filter(id=building_id).first()
         data['building'] = building
+
         branch_id = data['branch']
+        branch = Branch.objects.filter(id=branch_id).first()
+        data['branch'] = branch
+
+        data['registration_completed'] = True
+
         new_resident = Resident(**data)
-        new_resident.save()
+        try:
+            new_resident.save()
+        except ValueError:
+            bot.set_state(
+                message.from_user.id,
+                RegisterStates.description,
+                message.chat.id)
+            return
+
+    bot.set_state(
+        message.from_user.id,
+        RegisterStates.complete,
+        message.chat.id)
 
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
         building = data['building']
 
-    tg_group_invite = list(
-        Building.objects.values_list('tg_group_invite', flat=True))[building]
+    tg_group_invites = list(
+        Building.objects.values_list('tg_group_invite', flat=True))[building_id - 1]
 
     keyboard = types.InlineKeyboardMarkup()
     button = types.InlineKeyboardButton(
-        'Вступайте в свою группу', url=tg_group_invite)
+        'Вступайте в свою группу', url=tg_group_invites)
     keyboard.add(button)
 
     bot.send_message(message.chat.id, text, reply_markup=keyboard)
