@@ -81,3 +81,30 @@ class Resident(models.Model):
     class Meta:
         verbose_name = 'Резидент'
         verbose_name_plural = 'Резиденты'
+
+
+class Event(models.Model):
+    caption = models.CharField(
+        max_length=100, default='', unique=True, verbose_name='Заголовок',
+        blank=True, null=True)
+    description = models.TextField(
+        max_length=1000, default='', verbose_name='Описание', blank=True)
+    place = models.CharField(
+        max_length=100, verbose_name='Место проведения')
+    start_datetime = models.DateTimeField(
+        verbose_name='Начало', blank=True)
+    end_datetime = models.DateTimeField(
+        verbose_name='Конец', blank=True)
+    picture = models.ImageField(
+        default='', verbose_name='Картинка', blank=True)
+
+    def __str__(self):
+        return f'{self.caption}. Начало {self.start_datetime}'
+
+    @property
+    def photo_preview(self):
+        return mark_safe(f'<img src="{self.picture.url}" width="300"/>') if self.picture else ''
+
+    class Meta:
+        verbose_name = 'Мероприятие'
+        verbose_name_plural = 'Мероприятия'

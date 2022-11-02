@@ -17,3 +17,4 @@ class ResidentAdmin(admin.ModelAdmin):
 admin.site.register(models.Branch)
 admin.site.register(models.Resident, ResidentAdmin)
 admin.site.register(models.Building)
+admin.site.register(models.Event)

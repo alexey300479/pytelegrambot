@@ -8,7 +8,7 @@ from django.core.validators import URLValidator
 from telebot import TeleBot  # Используем синхронный бот
 from telebot import types  # Подключили дополнения
 from telebot import custom_filters
-from telebot import formatting
+from telebot import apihelper
 from telebot.storage import StateRedisStorage
 from tobibotapp.models import Branch, Building, Resident
 
@@ -17,6 +17,10 @@ from .lib.email import get_confirm_code, send_email
 from .lib.states import RegisterStates
 from .lib.validators import is_date_valid, is_email_valid, is_phone_valid
 
+# Решаем проблему с исключениями по таймауту на сервере
+apihelper.SESSION_TIME_TO_LIVE = 5 * 60
+
+# Режим отладки
 DEBUG = True
 
 
@@ -36,218 +40,6 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         bot.add_custom_filter(custom_filters.StateFilter(bot))
         bot.infinity_polling(skip_pending=True)  # Запустили бот
-
-
-# Обрабатываем команды /start и /help
-@bot.message_handler(commands=['start', 'help'])
-def start_help(message):
-    # Отладка
-    if DEBUG:
-        print('start/help')
-
-    # Если эту команду мы получили от бота, то игноририуем
-    if message.from_user.is_bot:
-        return
-
-    # Если это не бот, то сразу устанавливаем в redis состояние tg_user_id_username
-    # и записываем в данные tg_user_id и tg_username
-    bot.set_state(
-        message.from_user.id,
-        RegisterStates.tg_user_id_username,
-        message.chat.id)
-
-    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
-        data['tg_user_id'] = message.from_user.id
-        data['tg_username'] = message.from_user.username
-
-    # Пытаемся получить запись с таким id из БД
-    resident = Resident.objects.filter(tg_user_id=message.from_user.id).first()
-
-    # Если такая запись есть или пользователь запросил подсказку
-    if resident is not None or message.text == '/help':
-        text = '''
-Для поиска резидентов по направлениям бизнеса воспользуйтесь командой /catalog
-
-Для получения информации о предстоящих событиях бизнес-инкубатора и центра "Мой Бизнес" воспользуйтесь командой /events
-
-Для отправки обращения в службу технической поддержки воспользуйтесь командой /support
-
-Если хотите забронировать конференцзал, класс или переговорную комнату на определенное время отправьте /book
-
-Если хотите провести своё мероприятие при информационной поддержке бизнес-инкубатора и центра "Мой Бизнес" отправьте /propose
-        '''
-        bot.send_message(message.chat.id, text)
-    else:
-        keyboard = types.ReplyKeyboardMarkup(
-            row_width=1, one_time_keyboard=True, resize_keyboard=True)
-
-        button_reg = types.KeyboardButton(
-            text="РЕГИСТРАЦИЯ", request_contact=True)
-        keyboard.add(button_reg)
-        text = '''
-Вы еще не зарегистрированы в системе.
-
-Я помогу сделать это быстро и удобно.
-
-Нажмите на кнопку <<РЕГИСТРАЦИЯ>> и дайте согласие на отправку ваших контактных данных.
-
-Если ваш профиль в Telegram заполнен верно, то вам не придётся вводить имя, фамилию и номер телефона вручную.
-
-ВНИМАНИЕ! Нажимая на кнопку <<РЕГИСТРАЦИЯ>> вы даёте ГУ ТО "Тульский областной бизнес-инкубатор" согласие на обработку и хранение персональных данных в соответствии с законодательством РФ. 
-            '''
-        bot.send_message(message.chat.id, text, reply_markup=keyboard)
-
-
-# Обрабатываем команду /state
-@bot.message_handler(commands=['state'])
-def state(message):
-    bot_state = bot.get_state(message.from_user.id, message.chat.id)
-    bot.send_message(message.chat.id, f'Текущее состояние бота: {bot_state}')
-
-
-# Объявили ветку, в которой прописываем логику на тот случай, если пользователь решит прислать номер телефона
-@bot.message_handler(content_types=['contact'])
-def contact(message):
-    # Отладка
-    if DEBUG:
-        print('contact')
-
-    if message.contact is not None:  # Если присланный объект contact не пустой
-        if message.contact.first_name is not None\
-                and message.contact.last_name is not None\
-                and message.contact.phone_number is not None\
-                and message.from_user.username is not None:
-
-            text = f'''
-Ваше имя: {message.contact.first_name}
-Ваша фамилия: {message.contact.last_name}
-Ваш номер телефона: {message.contact.phone_number}
-
-Всё верно?
-        '''
-            keyboard = types.InlineKeyboardMarkup()
-            # По нажатию кнопки "ДА" передаем номер телефона
-            button_yes = types.InlineKeyboardButton(
-                text='ДА', callback_data=message.contact.phone_number)
-            # По нажатию кнопки "НЕТ" передаем
-            button_no = types.InlineKeyboardButton(
-                text='НЕТ', callback_data='wrong_contacts')
-            keyboard.add(button_yes)
-            keyboard.add(button_no)
-            bot.send_message(message.chat.id, text, reply_markup=keyboard)
-        else:
-            text = '''
-Ваш профиль в Telegram не оформлен должным образом.
-Сожалею, но придётся ввести данные вручную.
-
-Итак, ваше имя:
-'''
-            bot.set_state(
-                message.from_user.id,
-                RegisterStates.first_name,
-                message.chat.id)
-
-            bot.send_message(message.chat.id, text)
-
-
-@bot.message_handler(state=RegisterStates.first_name)
-def get_first_name(message):
-
-    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
-        data['first_name'] = message.text
-
-    bot.set_state(
-        message.from_user.id,
-        RegisterStates.last_name,
-        message.chat.id)
-
-    text = '''
-Ваше имя успешно сохранёно в базе 👍🏻.
-Прогресс регистрации 3 из 15 🛫.
-
-Введите вашу фамилию:
-    '''
-
-    bot.send_message(message.chat.id, text)
-
-
-@bot.message_handler(state=RegisterStates.last_name)
-def get_last_name(message):
-
-    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
-        data['last_name'] = message.text
-
-    bot.set_state(
-        message.from_user.id,
-        RegisterStates.phone,
-        message.chat.id)
-
-    text = '''
-Ваша фамилия успешно сохраена в базе 👍🏻.
-Прогресс регистрации 4 из 15 🛫.
-
-Введите ваш номер телефона:
-    '''
-
-    bot.send_message(message.chat.id, text)
-
-
-@bot.message_handler(state=RegisterStates.phone)
-def get_phone(message):
-
-    if is_phone_valid(message.text):
-        with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
-            data['phone'] = message.text
-
-        bot.set_state(
-            message.from_user.id,
-            RegisterStates.email,
-            message.chat.id)
-
-        text = '''
-Ваш номер телефона успешно сохранён в базе 👍🏻.
-Прогресс регистрации 5 из 15 🛫.
-
-Теперь я попрошу у вас адрес электронной почты.
-
-Идеально, если эта почта будет доступна всем сотрудникам
-вашей организации.
-
-Это позволит им увидеть информацию о предстоящих обучающих мероприятиях и обсудить с вами участие в них.
-
-Новые знания для вас и ваших сотрудников очень помогут в развитии бизнеса и дадут массу новых идей 💡.
-
-Итак, ваша почта:
-        '''
-
-    else:
-        bot.set_state(
-            message.from_user.id,
-            RegisterStates.phone,
-            message.chat.id)
-
-        text = '''
-Что-то пошло не так.
-
-Введите номер телефона еще раз, пожалуйста:
-'''
-
-    bot.send_message(message.chat.id, text)
-
-
-@bot.message_handler(state='*', commands=['cancel'])
-def any_state(message):
-    if DEBUG:
-        report = f'''
-message_handler(state='*', commands=['cancel'])
-message.text: {message.text}
-message.from_user.id: {message.from_user.id}
-message.chat.id: {message.chat.id}
-        '''
-        print(report)
-
-    bot.send_message(message.chat.id, "Регистрация отменена")
-    bot.delete_state(message.from_user.id, message.chat.id)
 
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -395,7 +187,7 @@ Bot state is {bot.get_state(call.from_user.id, call.message.chat.id)}
         '''
         bot.send_message(call.message.chat.id, text)
 
-    elif call.data.split()[0] == 'Branch_to_find_residents:':
+    elif call.data.split()[0] == 'Branch_to_find:':
         branch_id = int(call.data.split()[1])
         if DEBUG:
             print(f'Branch ID selected: {branch_id}')
@@ -404,21 +196,6 @@ Bot state is {bot.get_state(call.from_user.id, call.message.chat.id)}
         for resident in residents:
             if DEBUG:
                 print(f'Resident found: {resident.company}')
-
-            # with open(resident.photo, 'rb') as photo:
-            demo_text = '''
-<b>bold</b>, <strong>bold</strong>
-<i>italic</i>, <em>italic</em>
-<u>underline</u>, <ins>underline</ins>
-<s>strikethrough</s>, <strike>strikethrough</strike>, <del>strikethrough</del>
-<span class="tg-spoiler">spoiler</span>, <tg-spoiler>spoiler</tg-spoiler>
-<b>bold <i>italic bold <s>italic bold strikethrough <span class="tg-spoiler">italic bold strikethrough spoiler</span></s> <u>underline italic bold</u></i> bold</b>
-<a href="http://www.example.com/">inline URL</a>
-<a href="tg://user?id=123456789">inline mention of a user</a>
-<code>inline fixed-width code</code>
-<pre>pre-formatted fixed-width code block</pre>
-<pre><code class="language-python">pre-formatted fixed-width code block written in the Python programming language</code></pre>
-            '''
 
             text = f'''
 <b>{resident.company}</b>
@@ -442,6 +219,245 @@ Bot state is {bot.get_state(call.from_user.id, call.message.chat.id)}
                 resident.photo,
                 caption=text,
                 parse_mode='HTML')
+    elif call.data == 'yes_on_cancel_registration':
+        # Удаляем запись резидента по user.id
+        Resident.objects.filter(tg_user_id=call.from_user.id).delete()
+        text = '''
+<b>Ваши данные полностью удалены из системы и вы удалены из чата бизнес-инкубатора!</b>
+Жаль, что вы больше не с нами.
+Радуемся за вас, если это произошло из-за того, что ваш бизнес успешно развился.
+Надеемся, что помогли в этом и желаем успехов в дальнейшем развитии вашего бизнеса!
+        '''
+        bot.send_message(
+            call.message.chat.id,
+            text=text,
+            parse_mode='HTML')
+
+
+# Обрабатываем команды /start и /help
+@bot.message_handler(commands=['start', 'help'])
+def start_help(message):
+    # Отладка
+    if DEBUG:
+        print('start/help')
+
+    # Если эту команду мы получили от бота, то игноририуем
+    if message.from_user.is_bot:
+        return
+
+    # Если это не бот, то сразу устанавливаем в redis состояние tg_user_id_username
+    # и записываем в данные tg_user_id и tg_username
+    bot.set_state(
+        message.from_user.id,
+        RegisterStates.tg_user_id_username,
+        message.chat.id)
+
+    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+        data['tg_user_id'] = message.from_user.id
+        data['tg_username'] = message.from_user.username
+
+    # Пытаемся получить запись с таким id из БД
+    resident = Resident.objects.filter(tg_user_id=message.from_user.id).first()
+
+    # Если такая запись есть или пользователь запросил подсказку
+    if resident is not None or message.text == '/help':
+        text = '''
+Начало работы, регистрация /start
+Подсказка по использованию бота /help
+Поиск других резидентов по направлению деятельности /find
+Предстоящие события бизнес-инкубатора /events
+Предложить своё мероприятие /suggest
+Забронировать переговорную, класс, конференцзал /book
+Обратиться в техподдержку /support
+Отменить регистрацию и удалить свои контакты из системы !!!ПРИМЕНЯТЬ ОСТОРОЖНО!!! /cancel
+
+Если хотите забронировать конференцзал, класс или переговорную комнату на определенное время отправьте /book
+
+Если хотите провести своё мероприятие при информационной поддержке бизнес-инкубатора и центра "Мой Бизнес" отправьте /propose
+        '''
+        bot.send_message(message.chat.id, text)
+    else:
+        keyboard = types.ReplyKeyboardMarkup(
+            row_width=1, one_time_keyboard=True, resize_keyboard=True)
+
+        button_reg = types.KeyboardButton(
+            text="РЕГИСТРАЦИЯ", request_contact=True)
+        keyboard.add(button_reg)
+        text = '''
+Вы еще не зарегистрированы в системе.
+
+Я помогу сделать это быстро и удобно.
+
+Нажмите на кнопку <<РЕГИСТРАЦИЯ>> и дайте согласие на отправку ваших контактных данных.
+
+Если ваш профиль в Telegram заполнен верно, то вам не придётся вводить имя, фамилию и номер телефона вручную.
+
+ВНИМАНИЕ! Нажимая на кнопку <<РЕГИСТРАЦИЯ>> вы даёте ГУ ТО "Тульский областной бизнес-инкубатор" согласие на обработку и хранение персональных данных в соответствии с законодательством РФ. 
+            '''
+        bot.send_message(message.chat.id, text, reply_markup=keyboard)
+
+
+if DEBUG:
+    # Обрабатываем команду /state
+    @bot.message_handler(commands=['state'])
+    def state(message):
+        bot_state = bot.get_state(message.from_user.id, message.chat.id)
+        bot.send_message(
+            message.chat.id, f'Текущее состояние бота: {bot_state}')
+
+# Обрабатываем команду /cancel
+
+
+@bot.message_handler(commands=['cancel'])
+def cancel(message):
+    text = '''
+Эта команда удалит все ваши данные из системы и исключит вас из чатов бизнес-инкубатора.
+<b>Вы уверены, что хотите именно этого?</b>
+    '''
+
+    keyboard = types.InlineKeyboardMarkup()
+    # По нажатию кнопки "ДА" передаем "yes_cancel_registration"
+    button_yes = types.InlineKeyboardButton(
+        text='ДА', callback_data='yes_on_cancel_registration')
+    # По нажатию кнопки "НЕТ" передаем "no_cancel_registration"
+    button_no = types.InlineKeyboardButton(
+        text='НЕТ', callback_data='no_on_cancel_registration')
+    keyboard.add(button_yes)
+    keyboard.add(button_no)
+    bot.send_message(
+        message.chat.id, text,
+        reply_markup=keyboard,
+        parse_mode='HTML')
+
+
+# Объявили ветку, в которой прописываем логику на тот случай, если пользователь решит прислать номер телефона
+@bot.message_handler(content_types=['contact'])
+def contact(message):
+    # Отладка
+    if DEBUG:
+        print('contact')
+
+    if message.contact is not None:  # Если присланный объект contact не пустой
+        if message.contact.first_name is not None\
+                and message.contact.last_name is not None\
+                and message.contact.phone_number is not None\
+                and message.from_user.username is not None:
+
+            text = f'''
+Ваше имя: {message.contact.first_name}
+Ваша фамилия: {message.contact.last_name}
+Ваш номер телефона: {message.contact.phone_number}
+
+Всё верно?
+        '''
+            keyboard = types.InlineKeyboardMarkup()
+            # По нажатию кнопки "ДА" передаем номер телефона
+            button_yes = types.InlineKeyboardButton(
+                text='ДА', callback_data=message.contact.phone_number)
+            # По нажатию кнопки "НЕТ" передаем
+            button_no = types.InlineKeyboardButton(
+                text='НЕТ', callback_data='wrong_contacts')
+            keyboard.add(button_yes)
+            keyboard.add(button_no)
+            bot.send_message(message.chat.id, text, reply_markup=keyboard)
+        else:
+            text = '''
+Ваш профиль в Telegram не оформлен должным образом.
+Сожалею, но придётся ввести данные вручную.
+
+Итак, ваше имя:
+'''
+            bot.set_state(
+                message.from_user.id,
+                RegisterStates.first_name,
+                message.chat.id)
+
+            bot.send_message(message.chat.id, text)
+
+
+@bot.message_handler(state=RegisterStates.first_name)
+def get_first_name(message):
+
+    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+        data['first_name'] = message.text
+
+    bot.set_state(
+        message.from_user.id,
+        RegisterStates.last_name,
+        message.chat.id)
+
+    text = '''
+Ваше имя успешно сохранёно в базе 👍🏻.
+Прогресс регистрации 3 из 15 🛫.
+
+Введите вашу фамилию:
+    '''
+
+    bot.send_message(message.chat.id, text)
+
+
+@bot.message_handler(state=RegisterStates.last_name)
+def get_last_name(message):
+
+    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+        data['last_name'] = message.text
+
+    bot.set_state(
+        message.from_user.id,
+        RegisterStates.phone,
+        message.chat.id)
+
+    text = '''
+Ваша фамилия успешно сохраена в базе 👍🏻.
+Прогресс регистрации 4 из 15 🛫.
+
+Введите ваш номер телефона:
+    '''
+
+    bot.send_message(message.chat.id, text)
+
+
+@bot.message_handler(state=RegisterStates.phone)
+def get_phone(message):
+
+    if is_phone_valid(message.text):
+        with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+            data['phone'] = message.text
+
+        bot.set_state(
+            message.from_user.id,
+            RegisterStates.email,
+            message.chat.id)
+
+        text = '''
+Ваш номер телефона успешно сохранён в базе 👍🏻.
+Прогресс регистрации 5 из 15 🛫.
+
+Теперь я попрошу у вас адрес электронной почты.
+
+Идеально, если эта почта будет доступна всем сотрудникам
+вашей организации.
+
+Это позволит им увидеть информацию о предстоящих обучающих мероприятиях и обсудить с вами участие в них.
+
+Новые знания для вас и ваших сотрудников очень помогут в развитии бизнеса и дадут массу новых идей 💡.
+
+Итак, ваша почта:
+        '''
+
+    else:
+        bot.set_state(
+            message.from_user.id,
+            RegisterStates.phone,
+            message.chat.id)
+
+        text = '''
+Что-то пошло не так.
+
+Введите номер телефона еще раз, пожалуйста:
+'''
+
+    bot.send_message(message.chat.id, text)
 
 
 @bot.message_handler(state=RegisterStates.email)
@@ -519,7 +535,7 @@ Chat ID: {message.chat.id}
 def email_confirm(message):
     # Отладка
     if DEBUG:
-        print(f'RegisterStates.email_confirm')
+        print('RegisterStates.email_confirm')
 
     # Берем код подтверждения из redis
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
@@ -764,8 +780,42 @@ def get_company(message):
     bot.send_message(message.chat.id, text, reply_markup=keyboard)
 
 
-@bot.message_handler(commands=['find_residents'])
-def find_residents(message):
+@bot.message_handler(commands=['find'])
+def find(message):
+
+    # Проверяем, зарегистрирован ли пользователь в системе в качестве резидента
+    # если нет приглашаем зарегистрироваться
+    resident = Resident.objects.filter(tg_user_id=message.from_user.id).first()
+    if resident is None:
+        keyboard = types.ReplyKeyboardMarkup(
+            row_width=1, one_time_keyboard=True, resize_keyboard=True)
+
+        button_reg = types.KeyboardButton(
+            text="РЕГИСТРАЦИЯ", request_contact=True)
+
+        keyboard.add(button_reg)
+
+        text = '''
+<b>Поиск резидентов могут осуществлять только пользователи прошедшие процедуру регистрации в качестве резидентов бизнес-инкубатора.</b>
+
+Вы еще не зарегистрированы в системе.
+
+Я помогу сделать это быстро и удобно.
+
+Нажмите на кнопку &lt&ltРЕГИСТРАЦИЯ&gt&gt и дайте согласие на отправку ваших контактных данных.
+
+Если ваш профиль в Telegram заполнен верно, то вам не придётся вводить имя, фамилию и номер телефона вручную.
+
+ВНИМАНИЕ! Регистрируясь в системе вы даёте ГУ ТО "Тульский областной бизнес-инкубатор" согласие на обработку и хранение персональных данных в соответствии с законодательством РФ. 
+
+В любой момент, если это потребуется вы сможете отменить свою регистрацию и все данные будут удалены из системы безвозвратно.
+            '''
+        bot.send_message(
+            message.chat.id, text,
+            parse_mode='HTML',
+            reply_markup=keyboard)
+        return
+
     # Отладка
     if DEBUG:
         print('find_resdents')
@@ -779,7 +829,7 @@ def find_residents(message):
     keyboard = types.InlineKeyboardMarkup()
     for i, branch in enumerate(branches, start=1):
         button = types.InlineKeyboardButton(
-            f'{i}. {branch}', callback_data=f'Branch_to_find_residents: {i}')
+            f'{i}. {branch}', callback_data=f'Branch_to_find: {i}')
         keyboard.add(button)
 
     bot.send_message(message.chat.id, text, reply_markup=keyboard)
